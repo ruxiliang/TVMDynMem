@@ -41,6 +41,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <random>
 
 #include "../file_utils.h"
 
@@ -61,6 +62,7 @@ void GraphExecutor::Run() {
   ref_cnt.resize(num_node_entries(), 0);
   // setup the array and requirements.
   for (size_t i = 0; i < op_execs_.size(); ++i) {
+    counter += 1;
     if (op_execs_[i]) PerformOp(i);
   }
 }
@@ -77,9 +79,11 @@ void GraphExecutor::PerformOp(size_t nid) {
       continue;
     // otherwise we should rematerialize the input tensors that are not in the memory
     // and update the reference count at the same time
-    if (is_evicted(entry_id(input))) RematerializeTensor(entry_id(input));
-    ICHECK_GE(ref_cnt[entry_id(input)],1);
     ref_cnt[entry_id(input)] += 1;
+    auto id = entry_id(input);
+    if (is_evicted(entry_id(input)))
+      RematerializeTensor(entry_id(input));
+    ICHECK_GE(ref_cnt[entry_id(input)],1);
   }
   // now all of the inputs are recovered, we can set up to compute the location of input/output
   // compute current input memory location of the tensor
@@ -107,7 +111,7 @@ void GraphExecutor::PerformOp(size_t nid) {
   for (uint32_t index = 0; index < inode.param.num_outputs; ++index) {
     uint32_t eid = this->entry_id(nid, index);
     set_tensor(eid);
-    ref_cnt[eid] += 1;
+    // ref_cnt[eid] += 1;
     args.push_back(*(data_entry_[eid].operator->()));
   }
 
@@ -147,13 +151,17 @@ void GraphExecutor::PerformEviction(size_t curr_tensor) {
 void GraphExecutor::FreeTensor(size_t nid,size_t curr_tensor) {
   // ICHECK_NE(get_sid(nid), get_sid(curr_tensor));
   // first we need to clean all the data entries
+  bool flag = true;
   for (size_t i = 0; i < curr_tensor; i++) {
+    if (ref_cnt[i]) {
+      flag = false; continue;
+    }
     if (std::find(input_nodes_.begin(), input_nodes_.end(), i) == input_nodes_.end() &&
         get_sid(nid) == get_sid(i) && data_entry_[i].defined())
       data_entry_[i].reset();
   }
   // then we clean the storage pool
-  if (get_sid(nid) != get_sid(curr_tensor))
+  if (get_sid(nid) != get_sid(curr_tensor) && flag)
     storage_pool_[get_sid(nid)].reset();
 }
 
@@ -161,8 +169,11 @@ void GraphExecutor::EvictTensor(size_t nid,size_t curr_tensor) {
   if (Heuristic(nid)) FreeTensor(nid,curr_tensor);
 }
 bool GraphExecutor::Heuristic(size_t nid) {
-  counter += 1;
-  return counter % 2;
+  std::default_random_engine rng_gen;
+  std::normal_distribution<double> distribution(0,1);
+  auto num = static_cast<size_t>(fmul(distribution(rng_gen), 100.0));
+  LOG_INFO << num;
+  return num % 2;
 }
 /*!
  * \brief Initialize the graph executor with graph and device.
