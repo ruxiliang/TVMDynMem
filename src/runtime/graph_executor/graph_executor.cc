@@ -138,7 +138,15 @@ void GraphExecutor::PerformEviction(size_t nid) {
 }
 
 void GraphExecutor::FreeTensor(size_t nid) {
-  data_entry_[nid].reset();
+  counter += 1;
+  if (counter % 2) return;
+  // first we need to clean all the data entries
+  for (size_t i = 0; i < num_node_entries(); i++) {
+    if (std::find(input_nodes_.begin(), input_nodes_.end(), i) == input_nodes_.end() &&
+        get_sid(nid) == get_sid(i))
+      data_entry_[i].reset();
+  }
+  // then we clean the storage pool
   storage_pool_[get_sid(nid)].reset();
 }
 /*!
@@ -153,6 +161,7 @@ void GraphExecutor::FreeTensor(size_t nid) {
 void GraphExecutor::Init(const std::string& graph_json, tvm::runtime::Module module,
                          const std::vector<Device>& devs,
                          const PackedFunc lookup_linked_param_func) {
+  counter = 0;
   std::istringstream is(graph_json);
   dmlc::JSONReader reader(&is);
   this->Load(&reader);
@@ -571,7 +580,7 @@ void GraphExecutor::UpdateInputOutputTensors(const std::unordered_set<uint32_t>&
     if (output_node_eids.count(input_eid) > 0) {
       auto& eid_both = both_output_opinput_dltensors_[input_eid];
       auto both_tensor = static_cast<DLTensor*>(op_args->arg_values[i].v_handle);
-      if(std::find(eid_both.begin(), eid_both.end(), both_tensor) == eid_both.end()){
+      if (std::find(eid_both.begin(), eid_both.end(), both_tensor) == eid_both.end()) {
         eid_both.push_back(both_tensor);
       }
     }
@@ -583,7 +592,7 @@ void GraphExecutor::UpdateInputOutputTensors(const std::unordered_set<uint32_t>&
     if (output_node_eids.count(output_eid) > 0) {
       auto& eid_out = output_dltensors_[output_eid];
       auto out_tensor = static_cast<DLTensor*>(op_args->arg_values[i].v_handle);
-      if(std::find(eid_out.begin(), eid_out.end(), out_tensor) == eid_out.end()){
+      if (std::find(eid_out.begin(), eid_out.end(), out_tensor) == eid_out.end()) {
         eid_out.push_back(out_tensor);
       }
     }

@@ -542,6 +542,7 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    * \brief size and device type of each storage pool entry
    */
   std::vector<PoolEntry> pool_entry_;
+  size_t counter;
 };
 
 std::vector<Device> GetAllDevice(const TVMArgs& args, int dev_start_arg);
