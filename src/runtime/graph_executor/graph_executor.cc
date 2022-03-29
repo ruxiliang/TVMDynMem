@@ -78,7 +78,7 @@ void GraphExecutor::PerformOp(size_t nid) {
     // otherwise we should rematerialize the input tensors that are not in the memory
     // and update the reference count at the same time
     if (is_evicted(entry_id(input))) RematerializeTensor(entry_id(input));
-    ICHECK_LE(entry_id(input), ref_cnt.size());
+    ICHECK_GE(ref_cnt[entry_id(input)],1);
     ref_cnt[entry_id(input)] += 1;
   }
   // now all of the inputs are recovered, we can set up to compute the location of input/output
@@ -107,6 +107,7 @@ void GraphExecutor::PerformOp(size_t nid) {
   for (uint32_t index = 0; index < inode.param.num_outputs; ++index) {
     uint32_t eid = this->entry_id(nid, index);
     set_tensor(eid);
+    ref_cnt[eid] += 1;
     args.push_back(*(data_entry_[eid].operator->()));
   }
 
@@ -118,36 +119,50 @@ void GraphExecutor::PerformOp(size_t nid) {
   // now we can execute the operator
   op_execs_[nid]();
 
+  // After this we need to decrease the reference count of all the input tensors
+  // since we have finished using them
+
+  for(const auto& input: node.inputs){
+    // Again, continues when meet input and parameters
+    if (std::find(input_nodes_.begin(), input_nodes_.end(), entry_id(input)) != input_nodes_.end())
+      continue;
+    // decrease the reference count of input tensor
+    ref_cnt[entry_id(input)] -= 1;
+  }
   // at last, we should perform eviction
   PerformEviction(nid);
 }
 
-void GraphExecutor::PerformEviction(size_t nid) {
-  auto node = nodes_[nid];
-  for (const auto& input : node.inputs) {
-    // Again, continues when meet input and parameters
-    if (std::find(input_nodes_.begin(), input_nodes_.end(), entry_id(input)) != input_nodes_.end())
-      continue;
-    // Decrease the reference count and free when ref_cnt is zero
-    ref_cnt[entry_id(input)] -= 1;
-    // free tensor when ref_cnt is zero
-    if (!ref_cnt[entry_id(input)]) {
-      FreeTensor(entry_id(input));
+void GraphExecutor::PerformEviction(size_t curr_tensor) {
+  for(size_t i = 0; i < curr_tensor;i++){
+    // do not do anything on input and parameters
+    if (std::find(input_nodes_.begin(), input_nodes_.end(), i) != input_nodes_.end()) continue;
+    // And we can perform eviction on the input tensors whose ref_cnt is 0.
+    if (!ref_cnt[i]){
+      GraphExecutor::EvictTensor(i,curr_tensor);
     }
   }
 }
 
-void GraphExecutor::FreeTensor(size_t nid) {
-  counter += 1;
-  if (counter % 2) return;
+void GraphExecutor::FreeTensor(size_t nid,size_t curr_tensor) {
+  // ICHECK_NE(get_sid(nid), get_sid(curr_tensor));
   // first we need to clean all the data entries
-  for (size_t i = 0; i < num_node_entries(); i++) {
+  for (size_t i = 0; i < curr_tensor; i++) {
     if (std::find(input_nodes_.begin(), input_nodes_.end(), i) == input_nodes_.end() &&
-        get_sid(nid) == get_sid(i))
+        get_sid(nid) == get_sid(i) && data_entry_[i].defined())
       data_entry_[i].reset();
   }
   // then we clean the storage pool
-  storage_pool_[get_sid(nid)].reset();
+  if (get_sid(nid) != get_sid(curr_tensor))
+    storage_pool_[get_sid(nid)].reset();
+}
+
+void GraphExecutor::EvictTensor(size_t nid,size_t curr_tensor) {
+  if (Heuristic(nid)) FreeTensor(nid,curr_tensor);
+}
+bool GraphExecutor::Heuristic(size_t nid) {
+  counter += 1;
+  return counter % 2;
 }
 /*!
  * \brief Initialize the graph executor with graph and device.
@@ -777,6 +792,7 @@ std::shared_ptr<GraphExecutor::OpArgs> GraphExecutor::UpdateTVMOp(
   }
   return arg_ptr;
 }
+
 
 Module GraphExecutorCreate(const std::string& sym_json, const tvm::runtime::Module& m,
                            const std::vector<Device>& devs,

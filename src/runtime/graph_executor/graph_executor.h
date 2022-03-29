@@ -469,7 +469,7 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    * @param index
    * @return
    */
-  void FreeTensor(size_t nid);
+  void FreeTensor(size_t nid,size_t curr_tensor);
   // Get node entry index.
   uint32_t entry_id(uint32_t nid, uint32_t index) const { return node_row_ptr_[nid] + index; }
   // Get node entry index.
@@ -543,6 +543,8 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    */
   std::vector<PoolEntry> pool_entry_;
   size_t counter;
+  bool Heuristic(size_t nid);
+  void EvictTensor(size_t nid, size_t curr_tensor);
 };
 
 std::vector<Device> GetAllDevice(const TVMArgs& args, int dev_start_arg);
