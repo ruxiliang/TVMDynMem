@@ -235,6 +235,11 @@ class TVM_DLL GraphExecutor : public ModuleNode {
       }
     }
   };
+  // runtime info
+  struct RTInfo{
+    size_t use_cnt;
+    bool available;
+  };
   // Node
   struct Node {
     // operator type in string
@@ -511,8 +516,6 @@ class TVM_DLL GraphExecutor : public ModuleNode {
   std::vector<std::vector<DLTensor*>> both_output_opinput_dltensors_;
   /*! \brief Used for quick entry indexing. */
   std::vector<uint32_t> node_row_ptr_;
-  /*! \brief Used for quick referencing count */
-  std::vector<uint32_t> ref_cnt;
   /*! \brief Output entries. */
   std::vector<NodeEntry> outputs_;
   /*! \brief Additional graph attributes. */
@@ -543,6 +546,8 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    */
   std::vector<PoolEntry> pool_entry_;
   size_t counter;
+  /*! \brief record runtime memory info */
+  std::vector<RTInfo> runtime_info_;
 };
 
 std::vector<Device> GetAllDevice(const TVMArgs& args, int dev_start_arg);
