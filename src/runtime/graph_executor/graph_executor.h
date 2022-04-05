@@ -467,7 +467,7 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    * @param index
    * @return
    */
-  void PerformEviction(size_t nid);
+  void PerformEviction();
   /*!
    * \brief Perform tensor deallocaton
    * @param nid node id to the tensor
@@ -548,6 +548,8 @@ class TVM_DLL GraphExecutor : public ModuleNode {
   size_t counter;
   /*! \brief record runtime memory info */
   std::vector<RTInfo> runtime_info_;
+  /*! \brief quick indexing nodes that share the same storage slot */
+  std::vector<std::vector<size_t>> sid_to_nodes_;
 };
 
 std::vector<Device> GetAllDevice(const TVMArgs& args, int dev_start_arg);

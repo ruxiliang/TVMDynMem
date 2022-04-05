@@ -122,21 +122,32 @@ void GraphExecutor::PerformOp(size_t nid) {
   // now we can execute the operator
   op_execs_[nid]();
   runtime_info_[nid].available = true;
+  
+  // decrease the use count of the inputs
+  for(const auto& input:node.inputs){
+    auto eid = entry_id(input);
+    // ingore cpu
+    if (pool_entry_[get_sid(eid)].device_type == (int)(kDLCPU)) continue;
+    // decrease the use counter of inputs
+    runtime_info_[eid].use_cnt -= 1;
+    // and set them as unavaliable
+    runtime_info_[eid].available = false;
+  }
   // at last, we should perform eviction
-  PerformEviction(nid);
+  PerformEviction();
 }
 
-void GraphExecutor::PerformEviction(size_t nid) {
-  auto node = nodes_[nid];
-  for (const auto& input : node.inputs) {
-    // we do not care about cpu
-    if (pool_entry_[get_sid(entry_id(input))].device_type == (int)(kDLCPU)) continue;
-    // Decrease the reference count and free when ref_cnt is zero
-    runtime_info_[entry_id(input)].use_cnt -= 1;
-    // free tensor when ref_cnt is zero
-    if (!runtime_info_[entry_id(input)].use_cnt) {
-      FreeTensor(entry_id(input));
-      runtime_info_[entry_id(input)].available = false;
+void GraphExecutor::PerformEviction() {
+  // transverse all input sids and find the tensors whose use_cnt is zero
+  for(const auto& nodes:sid_to_nodes_){
+    for(const auto& node:nodes){
+      // ingore cpu tensors
+      if (pool_entry_[get_sid(node)].device_type == (int)(kDLCPU)) continue;
+      if (!runtime_info_[node].use_cnt) {
+        // only free unavailable tensors
+        if (!runtime_info_[node].available)
+          FreeTensor(node);
+      }
     }
   }
 }
@@ -529,6 +540,11 @@ void GraphExecutor::SetupStorage() {
     // determine memory usage using grabbed vtype
     size_t align = (vtype[i].bits / 8) * vtype[i].lanes;
     data_alignment_[i] = align < kAllocAlignment ? kAllocAlignment : align;
+  }
+  sid_to_nodes_.resize(num_node_entries());
+  // compute the map of sid to nodes
+  for (size_t nid = 0;nid < num_node_entries();nid++){
+    sid_to_nodes_[get_sid(nid)].push_back(nid);
   }
 }
 
