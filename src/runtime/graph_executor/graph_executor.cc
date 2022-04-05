@@ -66,7 +66,13 @@ void GraphExecutor::Run() {
     }
   }
 }
-
+/* \brief check whether it is a slice, node in cpu or input arguments*/
+bool GraphExecutor::IsIngoredTensor(size_t nid) {
+  return (pool_entry_[get_sid(nid)].device_type == (int)(kDLCPU)) ||
+         (std::find(input_nodes_.begin(), input_nodes_.end(), nid) != input_nodes_.end()) ||
+         (std::find(nodes_not_evicted_.begin(), nodes_not_evicted_.end(), nid) !=
+          nodes_not_evicted_.end());
+}
 void GraphExecutor::RematerializeTensor(size_t nid) { PerformOp(nid); }
 
 void GraphExecutor::PerformOp(size_t nid) {
@@ -75,15 +81,16 @@ void GraphExecutor::PerformOp(size_t nid) {
   // if they are not in memory, rematerialize them
   for (const auto& input : node.inputs) {
     // also we do not care about cpu
-    if (pool_entry_[get_sid(entry_id(input))].device_type == (int)(kDLCPU)) continue;
+    if (IsIngoredTensor(entry_id(input))) continue;
     // otherwise we should rematerialize the input tensors that are not in the memory
     // and update the reference count at the same time
 
-    if (!runtime_info_[entry_id(input)].use_cnt) {
-      if(!runtime_info_[entry_id(input)].available)
-        RematerializeTensor(entry_id(input));
+    if (is_evicted(entry_id(input))) {
+      RematerializeTensor(entry_id(input));
     }
+    // set all the input tensors and mark them as unevictable
     runtime_info_[entry_id(input)].use_cnt += 1;
+    runtime_info_[entry_id(input)].can_evict = false;
   }
   // now all of the inputs are recovered, we can set up to compute the location of input/output
   // compute current input memory location of the tensor
@@ -111,6 +118,7 @@ void GraphExecutor::PerformOp(size_t nid) {
   for (uint32_t index = 0; index < inode.param.num_outputs; ++index) {
     uint32_t eid = this->entry_id(nid, index);
     set_tensor(eid);
+    runtime_info_[nid].can_evict = false;
     args.push_back(*(data_entry_[eid].operator->()));
   }
 
@@ -121,32 +129,28 @@ void GraphExecutor::PerformOp(size_t nid) {
 
   // now we can execute the operator
   op_execs_[nid]();
-  runtime_info_[nid].available = true;
-  
   // decrease the use count of the inputs
-  for(const auto& input:node.inputs){
+  for (const auto& input : node.inputs) {
     auto eid = entry_id(input);
     // ingore cpu
-    if (pool_entry_[get_sid(eid)].device_type == (int)(kDLCPU)) continue;
+    if (IsIngoredTensor(eid)) continue;
     // decrease the use counter of inputs
     runtime_info_[eid].use_cnt -= 1;
-    // and set them as unavaliable
-    runtime_info_[eid].available = false;
+    // and set them as evictable
+    runtime_info_[eid].can_evict = true;
   }
   // at last, we should perform eviction
   PerformEviction();
 }
 
 void GraphExecutor::PerformEviction() {
-  // transverse all input sids and find the tensors whose use_cnt is zero
-  for(const auto& nodes:sid_to_nodes_){
-    for(const auto& node:nodes){
+  // transverse all input sids and find the tensors whose runtime_info_ is zero
+  for (const auto& nodes : sid_to_nodes_) {
+    for (const auto& node : nodes) {
       // ingore cpu tensors
-      if (pool_entry_[get_sid(node)].device_type == (int)(kDLCPU)) continue;
-      if (!runtime_info_[node].use_cnt) {
-        // only free unavailable tensors
-        if (!runtime_info_[node].available)
-          FreeTensor(node);
+      if (IsIngoredTensor(node)) continue;
+      if (!runtime_info_[node].use_cnt && runtime_info_[node].can_evict) {
+        FreeTensor(node);
       }
     }
   }
@@ -154,8 +158,7 @@ void GraphExecutor::PerformEviction() {
 
 void GraphExecutor::FreeTensor(size_t nid) {
   data_entry_[nid].reset();
-  if (storage_pool_[get_sid(nid)].use_count() == 1)
-    storage_pool_[get_sid(nid)].reset();
+  if (storage_pool_[get_sid(nid)].use_count() == 1) storage_pool_[get_sid(nid)].reset();
 }
 /*!
  * \brief Initialize the graph executor with graph and device.
@@ -519,7 +522,7 @@ void GraphExecutor::SetupStorage() {
   storage_pool_.resize(pool_entry_.size());
   for (size_t sid = 0; sid < pool_entry_.size(); sid++) {
     // We just allocate tensor for input nodes now
-    if (pool_entry_[sid].device_type == static_cast<int>(kDLCPU)){
+    if (pool_entry_[sid].device_type == static_cast<int>(kDLCPU)) {
       AllocTensor(sid);
     }
   }
@@ -533,7 +536,7 @@ void GraphExecutor::SetupStorage() {
     int storage_id = attrs_.storage_id[i];
     ICHECK_LT(static_cast<size_t>(storage_id), storage_pool_.size());
     // just make view for allocated parameters and tensors in cpu
-    if (pool_entry_[storage_id].device_type == static_cast<int>(kDLCPU)){
+    if (pool_entry_[storage_id].device_type == static_cast<int>(kDLCPU)) {
       data_entry_[i] = storage_pool_[storage_id].CreateView(attrs_.shape[i], vtype[i]);
     }
 
@@ -543,13 +546,26 @@ void GraphExecutor::SetupStorage() {
   }
   sid_to_nodes_.resize(num_node_entries());
   // compute the map of sid to nodes
-  for (size_t nid = 0;nid < num_node_entries();nid++){
+  for (size_t nid = 0; nid < num_node_entries(); nid++) {
     sid_to_nodes_[get_sid(nid)].push_back(nid);
   }
 }
 
 void GraphExecutor::SetupOpExecs() {
-  runtime_info_.resize(num_node_entries(),{0,false});
+  runtime_info_.resize(num_node_entries(), {0,false});
+  nodes_not_evicted_ = {};
+  for (size_t nid = 0; nid < num_node_entries(); nid++) {
+    auto slice_node = nodes_[nid];
+    if (slice_node.name.find("slice") != std::string::npos) {
+      nodes_not_evicted_.push_back(nid);
+      for (const auto& input : slice_node.inputs) {
+        if (std::find(nodes_not_evicted_.begin(), nodes_not_evicted_.end(), entry_id(input)) ==
+            nodes_not_evicted_.end()) {
+          nodes_not_evicted_.push_back(entry_id(input));
+        }
+      }
+    }
+  }
   op_execs_.resize(this->GetNumOfNodes());
   input_dltensors_.resize(num_node_entries());
   output_dltensors_.resize(num_node_entries());
@@ -769,7 +785,7 @@ PackedFunc GraphExecutor::GetFunction(const std::string& name,
 std::shared_ptr<GraphExecutor::OpArgs> GraphExecutor::UpdateTVMOp(
     uint32_t nid, const TVMOpParam& param, const std::vector<DLTensor>& args) {
   auto arg_ptr = op_mem_location_map_[nid];
-  if (arg_ptr){
+  if (arg_ptr) {
     arg_ptr->arg_values.clear();
     arg_ptr->arg_tcodes.clear();
   }

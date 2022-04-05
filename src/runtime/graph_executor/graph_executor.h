@@ -235,10 +235,10 @@ class TVM_DLL GraphExecutor : public ModuleNode {
       }
     }
   };
-  // runtime info
-  struct RTInfo{
+  // Runtime Info
+  struct RuntimeInfo{
     size_t use_cnt;
-    bool available;
+    bool can_evict;
   };
   // Node
   struct Node {
@@ -475,6 +475,7 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    * @return
    */
   void FreeTensor(size_t nid);
+  bool IsIngoredTensor(size_t nid);
   // Get node entry index.
   uint32_t entry_id(uint32_t nid, uint32_t index) const { return node_row_ptr_[nid] + index; }
   // Get node entry index.
@@ -547,9 +548,10 @@ class TVM_DLL GraphExecutor : public ModuleNode {
   std::vector<PoolEntry> pool_entry_;
   size_t counter;
   /*! \brief record runtime memory info */
-  std::vector<RTInfo> runtime_info_;
-  /*! \brief quick indexing nodes that share the same storage slot */
   std::vector<std::vector<size_t>> sid_to_nodes_;
+  std::vector<RuntimeInfo> runtime_info_;
+  /*! \brief nodes that should not be evicted */
+  std::vector<size_t> nodes_not_evicted_;
 };
 
 std::vector<Device> GetAllDevice(const TVMArgs& args, int dev_start_arg);
