@@ -67,7 +67,7 @@ void GraphExecutor::Run() {
   }
 }
 /* \brief check whether it is a slice, node in cpu or input arguments*/
-bool GraphExecutor::IsIngoredTensor(size_t nid) {
+bool GraphExecutor::IsIgnoredTensor(size_t nid) {
   return (pool_entry_[get_sid(nid)].device_type == (int)(kDLCPU)) ||
          (std::find(input_nodes_.begin(), input_nodes_.end(), nid) != input_nodes_.end()) ||
          (std::find(nodes_not_evicted_.begin(), nodes_not_evicted_.end(), nid) !=
@@ -81,7 +81,7 @@ void GraphExecutor::PerformOp(size_t nid) {
   // if they are not in memory, rematerialize them
   for (const auto& input : node.inputs) {
     // also we do not care about cpu
-    if (IsIngoredTensor(entry_id(input))) continue;
+    if (IsIgnoredTensor(entry_id(input))) continue;
     // otherwise we should rematerialize the input tensors that are not in the memory
     // and update the reference count at the same time
 
@@ -133,7 +133,7 @@ void GraphExecutor::PerformOp(size_t nid) {
   for (const auto& input : node.inputs) {
     auto eid = entry_id(input);
     // ingore cpu
-    if (IsIngoredTensor(eid)) continue;
+    if (IsIgnoredTensor(eid)) continue;
     // decrease the use counter of inputs
     runtime_info_[eid].use_cnt -= 1;
     // and set them as evictable
@@ -144,17 +144,28 @@ void GraphExecutor::PerformOp(size_t nid) {
 }
 
 void GraphExecutor::PerformEviction() {
+  std::vector<size_t> tensors_be_evicted{};
   // transverse all input sids and find the tensors whose runtime_info_ is zero
   for (const auto& nodes : sid_to_nodes_) {
     for (const auto& node : nodes) {
-      // ingore cpu tensors
-      if (IsIngoredTensor(node)) continue;
+      // ignore cpu tensors
+      if (IsIgnoredTensor(node)) continue;
       if (!runtime_info_[node].use_cnt && runtime_info_[node].can_evict) {
-        FreeTensor(node);
+        size_t score = Heuristic(node);
+        if (score) tensors_be_evicted.push_back(node);
       }
     }
   }
+  for(size_t nid:tensors_be_evicted){
+    FreeTensor(nid);
+  }
 }
+
+size_t GraphExecutor::Heuristic(size_t nid) {
+  counter += 1;
+  return counter % 2;
+}
+
 
 void GraphExecutor::FreeTensor(size_t nid) {
   data_entry_[nid].reset();
@@ -552,6 +563,7 @@ void GraphExecutor::SetupStorage() {
 }
 
 void GraphExecutor::SetupOpExecs() {
+  counter = 0;
   runtime_info_.resize(num_node_entries(), {0,false});
   nodes_not_evicted_ = {};
   for (size_t nid = 0; nid < num_node_entries(); nid++) {

@@ -475,7 +475,10 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    * @return
    */
   void FreeTensor(size_t nid);
-  bool IsIngoredTensor(size_t nid);
+  /*! \brief determines whether the tensor should be ignored. */
+  bool IsIgnoredTensor(size_t nid);
+  /*! \brief heuristic function */
+  size_t Heuristic(size_t nid);
   // Get node entry index.
   uint32_t entry_id(uint32_t nid, uint32_t index) const { return node_row_ptr_[nid] + index; }
   // Get node entry index.
